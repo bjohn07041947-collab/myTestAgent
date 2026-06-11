@@ -1,0 +1,11 @@
+livekit-api
+livekit-agents[openai,silero,deepgram,cartesia,turn-detector]
+python-dotenv
+fastapi
+uvicorn
+langfuse<3.0
+openai
+pyautogui
+opencv-python
+pillow
+
