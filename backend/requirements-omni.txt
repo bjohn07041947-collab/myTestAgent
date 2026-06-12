@@ -1,0 +1,9 @@
+# Optional dependencies for the OmniParser-based element locator.
+# Install on top of requirements.txt:
+#   pip install -r requirements-omni.txt
+#
+# Note: the OmniParser icon_detect model weights are AGPL-3.0 licensed
+# (inherited from YOLO); fine for internal testing use.
+torch
+ultralytics
+huggingface-hub
