@@ -1,13 +1,17 @@
-"""Two-pass, grid-based visual element locator.
+"""Visual element locator: OmniParser detection with grid-refinement fallback.
 
-Iterative grid refinement: the vision model is shown the full screenshot with
-a coarse 10x10 grid and returns the cell range covering the target (every cell
-the element touches, since elements often span several cells). That range
-(plus margin) is then cropped from the full-resolution screenshot, upscaled,
-re-gridded, and asked again — repeating until a grid row is smaller than the
-click precision threshold. The click lands on the center of the final range
-rectangle, which handles small boundary-straddling targets (radio buttons) and
-wide ones (full-width input fields) alike.
+Primary backend (omni_locator.py): the OmniParser icon detector finds every
+interactable element with a pixel-accurate bounding box, and one set-of-mark
+vision call picks the matching box. Set LOCATOR_BACKEND=grid to disable.
+
+Fallback — iterative grid refinement: the vision model is shown the full
+screenshot with a coarse 10x10 grid and returns the cell range covering the
+target (every cell the element touches, since elements often span several
+cells). That range (plus margin) is then cropped from the full-resolution
+screenshot, upscaled, re-gridded, and asked again — repeating until a grid row
+is smaller than the click precision threshold. The click lands on the center
+of the final range rectangle, which handles small boundary-straddling targets
+(radio buttons) and wide ones (full-width input fields) alike.
 
 Vision calls go through the LiveKit inference gateway, so only the LiveKit
 credentials from .env are required (same as the conversational agent).
@@ -35,7 +39,7 @@ import grid
 logger = logging.getLogger("element-locator")
 
 # Use a strong vision model for grounding; the conversational LLM can stay small.
-DEFAULT_MODEL = "openai/gpt-4.1"
+DEFAULT_MODEL = "openai/gpt-5.1"
 MAX_UPLOAD_WIDTH = 1600
 _CONN_OPTIONS = APIConnectOptions(timeout=30.0)
 
@@ -61,9 +65,18 @@ If the target is a form control (input field, dropdown, button, radio button)
 that has a separate text label, give the cells of the clickable control
 itself, NOT the label text.
 
+Match by meaning, not exact wording: the element may show an abbreviation,
+code, or different phrasing than the description (a state dropdown may show
+"FL" for Florida). The abbreviation or rephrasing must expand to EXACTLY the
+described item: "FL" matches Florida, but "FL" does NOT match Texas — a
+different item of the same kind is NOT a match, even if it is the only one
+of its kind on screen.
+
 Respond with ONLY this JSON, no other text:
-{{"found": true, "cells": "<top-left cell>:<bottom-right cell>"}}
-If the target is not visible, respond with {{"found": false, "cells": null}}."""
+{{"found": true, "cells": "<top-left cell>:<bottom-right cell>", "evidence": "<the exact visible text or appearance of that element>"}}
+Answer "found": true ONLY if you can cite concrete evidence that the cells
+contain the described element. If nothing on this screen corresponds to the
+description, you MUST respond {{"found": false, "cells": null, "evidence": null}}."""
 
 _VERIFY_PROMPT = """You are looking at a screenshot of an application under test.
 
@@ -97,16 +110,56 @@ class ElementLocator:
         self.llm = inference.LLM(model=model)
         self.debug_dir = Path(__file__).parent / "debug" if os.getenv("LOCATOR_DEBUG") else None
 
+        # OmniParser backend (set LOCATOR_BACKEND=grid to disable). Needs the
+        # optional deps from requirements-omni.txt; without them we silently
+        # stay on the grid backend.
+        self._omni = None
+        if os.getenv("LOCATOR_BACKEND", "omni").lower() != "grid":
+            try:
+                from omni_locator import OmniParserLocator
+
+                self._omni = OmniParserLocator()
+                logger.info("OmniParser locator enabled, grid as fallback")
+            except Exception as e:
+                logger.info(f"OmniParser locator unavailable ({e}); using grid locator")
+
     async def locate(self, description: str) -> Optional[Tuple[float, float]]:
         """Find an element on the current screen by natural-language description.
 
         Returns (x, y) in logical screen points ready for pyautogui, or None.
+        Tries the OmniParser backend first (pixel-accurate boxes, one LLM
+        call); falls back to iterative grid refinement when it has no match.
         """
-        screenshot, gridded, geometry = await asyncio.to_thread(grid.capture_with_grid)
-        self._save_debug(gridded, "pass1")
-
-        screenshot.save('my_grid-new.png', format='PNG')
+        screenshot, scale_factor = await asyncio.to_thread(grid.capture_screenshot)
+        await asyncio.to_thread(screenshot.save, 'my_grid-new.png', 'PNG')
         print("locate fn called")
+
+        if self._omni is not None:
+            try:
+                target, status = await self._omni.locate(
+                    description, screenshot, scale_factor, self._ask
+                )
+                if target is not None:
+                    return target
+                if status == "refused":
+                    # The SoM model saw every detected element (including plain
+                    # text rows) and said the target is not there: trust it.
+                    # Falling back to the grid here mostly invents matches for
+                    # absent elements instead of finding real ones.
+                    logger.info(f"OmniParser: {description!r} is not on screen")
+                    return None
+                logger.info(f"OmniParser inconclusive for {description!r}; trying grid")
+            except Exception:
+                logger.exception("OmniParser locate failed; falling back to grid")
+
+        return await self._locate_grid(description, screenshot, scale_factor)
+
+    async def _locate_grid(
+        self, description: str, screenshot: Image.Image, scale_factor: float
+    ) -> Optional[Tuple[float, float]]:
+        gridded = screenshot.copy()
+        geometry = grid.draw_grid(gridded, 10, 10, scale_factor=scale_factor)
+        self._save_debug(gridded, "pass1")
 
         prompt = _CELL_PROMPT.format(description=description)
         cells = self._cells_from(await self._ask(prompt, gridded))
@@ -189,3 +242,4 @@ class ElementLocator:
             return
         self.debug_dir.mkdir(exist_ok=True)
         image.save(self.debug_dir / f"last_{name}.png", format="PNG")
+

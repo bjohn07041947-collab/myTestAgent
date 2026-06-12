@@ -2,16 +2,16 @@
 
 A test case file looks like:
 
-    # Application flow
+    # Calculator
 
     Optional free-text description.
 
     ## Steps
 
-    1. Click the radio button 
-    2. Enter "20000.00" in the amount field
+    1. Click the "New car" radio button under financing type
+    2. Enter "20000.00" in the financing amount field
     3. Wait 2 seconds
-    4. Verify result is displayed
+    4. Verify a monthly payment estimate is displayed
 
 Steps must be numbered list items. Supported step verbs:
 - Click / Select / Choose / Press / Tap / Open <element description>

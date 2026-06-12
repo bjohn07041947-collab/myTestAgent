@@ -258,7 +258,7 @@ text (as shown on screen) gives the matcher the strongest signal.
 
 ### Running tests
 
-Say "run the new car calculator test" during a session. The agent finds the
+Say "run the calculator test" during a session. The agent finds the
 matching test case (fuzzy name matching tolerates voice phrasing), executes
 each step (screenshot → locate → act → verify), and reports the results by
 voice. A full report is written to

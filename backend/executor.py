@@ -8,6 +8,7 @@ failed step.
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +23,11 @@ from testcases import TestCase, TestStep
 logger = logging.getLogger("test-executor")
 
 # Seconds to let the UI settle after a click or typing.
-ACTION_SETTLE_SECONDS = 1.5
+ACTION_SETTLE_SECONDS = 1.0
+
+# Click targets that select an option from a list: their effect is verified
+# after the click (the wrong neighboring row gets clicked silently otherwise).
+_SELECTS_OPTION = re.compile(r"\boption\b", re.IGNORECASE)
 
 
 @dataclass
@@ -75,6 +80,7 @@ class TestExecutor:
         logger.info(f"Running test case: {test_case.name} ({len(test_case.steps)} steps)")
 
         aborted = False
+        last_click_target: Optional[str] = None
         for step in test_case.steps:
             if aborted:
                 result.step_results.append(
@@ -82,8 +88,32 @@ class TestExecutor:
                 )
                 continue
             step_result = await self._execute_step(step)
+
+            # A click that can't find its target often means a dropdown opened
+            # by the previous click closed again (or never opened: the opener
+            # click can land a few pixels off). Re-click the previous target
+            # once and retry the step before declaring failure.
+            if (
+                step_result.status == "failed"
+                and step.action == "click"
+                and last_click_target is not None
+            ):
+                logger.info(
+                    f"Step {step.number} retry: re-clicking {last_click_target!r} first"
+                )
+                reopened, _ = await self.click_described(last_click_target)
+                if reopened:
+                    step_result = await self._execute_step(step)
+                    if step_result.status == "passed":
+                        step_result.detail = (
+                            f"{step_result.detail} (after re-opening "
+                            f"'{last_click_target}')"
+                        )
+
             result.step_results.append(step_result)
             logger.info(f"Step {step.number} {step_result.status}: {step.text}")
+            if step.action == "click" and step_result.status == "passed":
+                last_click_target = step.target
             # A failed click/type leaves the app in the wrong state for the
             # remaining steps; a failed verify is just a failed assertion.
             if step_result.status != "passed" and step.action in ("click", "type"):
@@ -94,6 +124,7 @@ class TestExecutor:
 
     async def click_described(self, description: str) -> Tuple[bool, str]:
         """Locate an element by description and click it."""
+        logger.info(f"click_described -- desc:{description}")
         print (f"click_described -- desc:{description}")
         target = await self.locator.locate(description)
         if target is None:
@@ -117,7 +148,23 @@ class TestExecutor:
                 ok, detail = await self.click_described(step.target)
                 if not ok:
                     await self._save_failure_screenshot(step)
-                return StepResult(step, "passed" if ok else "failed", detail)
+                    return StepResult(step, "failed", detail)
+                # Option clicks can silently land on a neighboring row (e.g.
+                # "Very good" instead of "Excellent"). Confirm the selection
+                # took effect; a failure here flows into the run() retry that
+                # re-opens the dropdown and tries again.
+                if _SELECTS_OPTION.search(step.target):
+                    chosen, reason = await self.locator.verify(
+                        f"the selection took effect: {step.target} is now "
+                        f"displayed as the chosen value in its dropdown"
+                    )
+                    if not chosen:
+                        await self._save_failure_screenshot(step)
+                        return StepResult(
+                            step, "failed",
+                            f"clicked but selection not applied: {reason}",
+                        )
+                return StepResult(step, "passed", detail)
 
             if step.action == "type":
                 if step.target:
@@ -126,6 +173,18 @@ class TestExecutor:
                         await self._save_failure_screenshot(step)
                         return StepResult(step, "failed", detail)
                 await self.type_text(step.input_text)
+                # The click can silently land on the wrong element (a nearby
+                # link instead of the input), sending the text nowhere.
+                # Confirm the text actually arrived before calling it a pass.
+                target_name = step.target or "the focused input field"
+                ok, reason = await self.locator.verify(
+                    f"{target_name} now contains '{step.input_text}'"
+                )
+                if not ok:
+                    await self._save_failure_screenshot(step)
+                    return StepResult(
+                        step, "failed", f"typed text did not arrive: {reason}"
+                    )
                 return StepResult(step, "passed")
 
             if step.action == "verify":
@@ -140,6 +199,7 @@ class TestExecutor:
             return StepResult(step, "error", str(e))
 
     def _do_click(self, x: float, y: float) -> None:
+        logger.info(f"_do_click: x:{x}, y:{y}")
         pyautogui.moveTo(x, y, duration=0.3)
         pyautogui.click()
 
@@ -177,3 +237,4 @@ class TestExecutor:
         path.write_text("\n".join(lines) + "\n")
         logger.info(f"Wrote test report: {path}")
         return path
+

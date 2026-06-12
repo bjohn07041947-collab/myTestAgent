@@ -1,3 +1,4 @@
+
 """Screen capture and labeled-grid overlay utilities for visual element location.
 
 Coordinates come in two flavors:
@@ -121,6 +122,13 @@ def draw_grid(
                 width=line_width,
             )
             label = f"{chr(65 + row)}{col + 1}"
+            # Semi-transparent chip behind the label so it stays readable on
+            # dark or busy backgrounds.
+            bbox = draw.textbbox((x0 + 6, y0 + 4), label, font=font)
+            draw.rectangle(
+                [bbox[0] - 3, bbox[1] - 2, bbox[2] + 3, bbox[3] + 2],
+                fill=(255, 255, 255, 190),
+            )
             draw.text((x0 + 6, y0 + 4), label, fill=(255, 0, 0, 255), font=font)
 
     image.save('my_grid-new-1.png', format='PNG')

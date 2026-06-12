@@ -85,7 +85,7 @@ class VideoAgent(Agent):
             instructions=instructions,
             #llm=openai.LLM(model="gpt-4.1"),
             #llm=inference.LLM(model="openai/gpt-4.1-mini"),
-            llm=inference.LLM(model="openai/gpt-4.1"),
+            llm=inference.LLM(model="openai/gpt-5.1"),
             stt=deepgram.STT(),
             tts=deepgram.TTS(),
             # tts=cartesia.TTS(
@@ -128,7 +128,7 @@ class VideoAgent(Agent):
         """Run an end to end test case from start to finish and report the results.
 
         Args:
-            name: The test case name as the user said it, for example "calculator".
+            name: The test case name as the user said it, for example "new car calculator".
         """
         self.test_case_manager.reload()
         test_case = self.test_case_manager.find(name)
@@ -144,8 +144,8 @@ class VideoAgent(Agent):
         """Click a single element on the screen described in natural language.
 
         Args:
-            description: What to click, for example "the radio button"
-                or "the submit button".
+            description: What to click, for example "the New car radio button"
+                or "the Get estimate button".
         """
         ok, detail = await self.executor.click_described(description)
         if not ok:
@@ -168,13 +168,12 @@ class VideoAgent(Agent):
 
         Args:
             expectation: What should be visible or true, for example
-                "an amount/text is displayed".
+                "an estimated monthly payment amount is displayed".
         """
         passed, reason = await self.locator.verify(expectation)
         status = "PASSED" if passed else "FAILED"
         return f"Verification {status}: {reason}"
 
-   
 
     async def close_video_stream(self) -> None:
         if self.video_stream:
@@ -265,12 +264,13 @@ class VideoAgent(Agent):
 
         
 
+
         #messages = openai.utils.to_chat_ctx(copied_ctx, cache_key=self.llm)
         messages = self.llm.chat(chat_ctx=copied_ctx)
         
         generation = self.get_current_trace().generation(
             name="llm_generation",
-            model="gpt-4.1",
+            model="gpt-5.1",
             #model="gpt-4.1-mini",
             input=messages,
         )
@@ -297,7 +297,7 @@ class VideoAgent(Agent):
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        span = self.get_current_trace().span(name="tts_node", metadata={"model": "deepgram"})
+        span = self.get_current_trace().span(name="tts_node", metadata={"model": "cartesia"})
         try:
             async for event in Agent.default.tts_node(self, text, model_settings):
                 yield event
